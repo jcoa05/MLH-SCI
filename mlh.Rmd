@@ -99,7 +99,7 @@ pacman::p_load(
  # Base Model Engines
  glmnet, ranger, xgboost, kernlab, earth,
  # Parallel Processing & Monitoring
- doFuture, tictoc, pryr, callr, ps,
+ doFuture, foreach, tictoc, pryr, callr, ps,
  # Data Manipulation
  dplyr, tidyr, purrr, tibble, stringr, forcats,
  # Visualization & Tables
@@ -1016,14 +1016,33 @@ pfun <- function(object, newdata) {
 tic.clearlog()
 tic("SHAP calculation")
 
+# We temporarily throttle the worker count to a safe number (2).
+# This provides ~2x speedup without the memory risk of using all cores.
+safe_shap_workers <- 2 
+cat(sprintf("Throttling parallel workers to %d for memory safety during SHAP...\n", 
+            safe_shap_workers))
+
+# Re-plan for this specific heavy task
+# This uses your existing doFuture setup but limits the active sessions.
+original_plan <- plan() # Save original plan
+plan(multisession, workers = safe_shap_workers) 
+
+set.seed(123)
+
 set.seed(123)
 shap_values <- fastshap::explain(
  object = df_stack_fitted,
  X = explain_data,
  pred_wrapper = pfun,
  nsim = PARAMS$shap_nsim,
- adjust = TRUE
+ adjust = TRUE,
+ parallel = TRUE, 
+  # Explicitly export packages required by the Stacked Ensemble prediction method
+  .packages = c("stacks", "tidymodels", "dplyr", "ranger", "xgboost", "earth", "kernlab")
 )
+
+# Restore the original global parallel plan
+plan(original_plan)
 
 timing_shap <- toc(log = TRUE, quiet = TRUE)
 save_timing("SHAP calculation", timing_shap)
