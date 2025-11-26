@@ -178,6 +178,7 @@ PARAMS <- list(
  
  # Evaluation
  bootstrap_iters = 50,
+ dalex_b = 10,
  shap_nsim = 5,
  
  # Clinical thresholds (for secondary analyses)
@@ -986,7 +987,7 @@ set.seed(123)
 vi_permutation <- DALEX::model_parts(
  explainer_stack,
  loss_function = DALEX::loss_root_mean_square,
- B = 10,
+ B = PARAMS$dalex_b,
  type = "difference"
 )
 
