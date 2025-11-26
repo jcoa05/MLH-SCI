@@ -713,8 +713,6 @@ save_timing("Bootstrap CIs", timing_bootstrap)
 # Feasibility deployment
 
 ```{r feasibility-deployment, echo=FALSE}
-# === RECOMENDATION #2: FINAL MODEL FOOTPRINT ===
-
 # 1. Measure R Object Size (RAM footprint during inference)
 # This is how much RAM is needed just to LOAD the model
 model_ram_size_mb <- as.numeric(lobstr::obj_size(df_stack_fitted)) / (1024^2)
