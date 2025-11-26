@@ -997,7 +997,7 @@ save_timing("Permutation importance", timing_perm)
 cat("Permutation importance calculated.\n")
 ```
 
-## SHAP Values (Optional)
+## SHAP Values
 
 ```{r shap-values, eval=TRUE}
 # ============================================================================
@@ -1017,16 +1017,15 @@ pfun <- function(object, newdata) {
 tic.clearlog()
 tic("SHAP calculation")
 
-# We temporarily throttle the worker count to a safe number (2).
-# This provides ~2x speedup without the memory risk of using all cores.
-safe_shap_workers <- 2 
+# We temporarily throttle the worker count to a safe number
+shap_workers <- min(max(1, floor(num_workers * 0.5)), 4)
 cat(sprintf("Throttling parallel workers to %d for memory safety during SHAP...\n", 
-            safe_shap_workers))
+            shap_workers))
 
 # Re-plan for this specific heavy task
 # This uses your existing doFuture setup but limits the active sessions.
 original_plan <- plan() # Save original plan
-plan(multisession, workers = safe_shap_workers) 
+plan(multisession, workers = shap_workers) 
 
 set.seed(123)
 
