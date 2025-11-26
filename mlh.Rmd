@@ -192,56 +192,110 @@ print(as_tibble(PARAMS))
 ## Memory Monitor
 
 ```{r monitor-setup, include=FALSE}
-# Background memory monitoring function
-# Tracks RSS (physical RAM) and VMS (virtual memory) for all R processes
+# ============================================================================
+# UNIFIED MEMORY MONITOR WITH PHASE LOGGING
+# ============================================================================
+# This monitor runs continuously throughout the workflow and logs:
+# - RSS (Resident Set Size): Physical RAM actually used
+# - VMS (Virtual Memory Size): Total virtual memory allocated
+# - Phase: Current workflow phase for visualization
+#
+# The monitor writes to a single CSV file that is read at the end to generate
+# a publication-quality figure showing RAM consumption across all phases.
+# ============================================================================
 
-monitor_system_ram <- function(log_file = "memory_log.csv", interval_seconds = 2) {
- write.csv(data.frame(timestamp = Sys.time(), rss_gb = 0, vms_gb = 0),
-           log_file, row.names = FALSE)
- 
- tryCatch({
-   my_pid <- Sys.getpid()
-   my_handle <- ps::ps_handle(my_pid)
-   target_user <- tryCatch(ps::ps_username(my_handle), error = function(e) NULL)
+MEMORY_LOG_FILE <- "memory_log_unified.csv"
+PHASE_MARKER_FILE <- "current_phase.txt"
+
+# Initialize the unified monitor
+monitor_unified_ram <- function(log_file = "memory_log_unified.csv", 
+                                phase_file = "current_phase.txt",
+                                interval_seconds = 2) {
   
-   while(TRUE) {
-     all_ps <- tryCatch(ps::ps(), error = function(e) NULL)
+  # Initialize log file with headers
+  write.csv(data.frame(
+    timestamp = Sys.time(), 
+    elapsed_sec = 0,
+    rss_gb = 0, 
+    vms_gb = 0,
+    phase = "Initialization"
+  ), log_file, row.names = FALSE)
+  
+  # Record start time
+
+  start_time <- Sys.time()
+  
+  # Initialize phase file
+  writeLines("Initialization", phase_file)
+  
+  tryCatch({
+    my_pid <- Sys.getpid()
+    my_handle <- ps::ps_handle(my_pid)
+    target_user <- tryCatch(ps::ps_username(my_handle), error = function(e) NULL)
     
-     if (!is.null(all_ps) && !is.null(target_user)) {
-       target_indices <- which(
-         grepl("rsession|rterm|rgui|rscript|rstudio", all_ps$name, ignore.case = TRUE) &
-         all_ps$username == target_user
-       )
-       r_ps <- all_ps[target_indices, ]
+    while(TRUE) {
+      # Read current phase from file (allows main process to update it)
+      current_phase <- tryCatch(
+        readLines(phase_file, n = 1, warn = FALSE),
+        error = function(e) "Unknown"
+      )
       
-       stats_list <- lapply(r_ps$pid, function(p) {
-         tryCatch({
-           h <- ps::ps_handle(pid = p)
-           mem <- ps::ps_memory_info(h)
-           return(c(rss = mem[["rss"]], vms = mem[["vms"]]))
-         }, error = function(e) c(rss = 0, vms = 0))
-       })
+      all_ps <- tryCatch(ps::ps(), error = function(e) NULL)
       
-       stats_mat <- do.call(rbind, stats_list)
-       total_rss_gb <- sum(stats_mat[, "rss"], na.rm = TRUE) / (1024^3)
-       total_vms_gb <- sum(stats_mat[, "vms"], na.rm = TRUE) / (1024^3)
+      if (!is.null(all_ps) && !is.null(target_user)) {
+        target_indices <- which(
+          grepl("rsession|rterm|rgui|rscript|rstudio", all_ps$name, ignore.case = TRUE) &
+            all_ps$username == target_user
+        )
+        r_ps <- all_ps[target_indices, ]
+        
+        stats_list <- lapply(r_ps$pid, function(p) {
+          tryCatch({
+            h <- ps::ps_handle(pid = p)
+            mem <- ps::ps_memory_info(h)
+            return(c(rss = mem[["rss"]], vms = mem[["vms"]]))
+          }, error = function(e) c(rss = 0, vms = 0))
+        })
+        
+        stats_mat <- do.call(rbind, stats_list)
+        total_rss_gb <- sum(stats_mat[, "rss"], na.rm = TRUE) / (1024^3)
+        total_vms_gb <- sum(stats_mat[, "vms"], na.rm = TRUE) / (1024^3)
+        
+        elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+        
+        write.table(
+          data.frame(
+            timestamp = Sys.time(), 
+            elapsed_sec = elapsed,
+            rss_gb = total_rss_gb, 
+            vms_gb = total_vms_gb,
+            phase = current_phase
+          ),
+          log_file, sep = ",", col.names = FALSE, row.names = FALSE, append = TRUE
+        )
+      }
       
-       write.table(
-         data.frame(timestamp = Sys.time(), rss_gb = total_rss_gb, vms_gb = total_vms_gb),
-         log_file, sep = ",", col.names = FALSE, row.names = FALSE, append = TRUE
-       )
-     }
-     Sys.sleep(interval_seconds)
-     if (file.exists("stop_monitoring.file")) break
-   }
- }, error = function(e) {})
+      Sys.sleep(interval_seconds)
+      if (file.exists("stop_monitoring.file")) break
+    }
+  }, error = function(e) {
+    message("Monitor error: ", e$message)
+  })
+}
+
+# Helper function to update phase (call this from main workflow)
+set_monitor_phase <- function(phase_name, phase_file = "current_phase.txt") {
+  writeLines(phase_name, phase_file)
+  Sys.sleep(0.5)  
 }
 
 # Cleanup from previous runs
-for (f in c("memory_log_tuning.csv", "memory_log_stacking.csv",
-           "memory_log_shap.csv", "stop_monitoring.file")) {
- if (file.exists(f)) file.remove(f)
+for (f in c(MEMORY_LOG_FILE, PHASE_MARKER_FILE, "stop_monitoring.file")) {
+  if (file.exists(f)) file.remove(f)
 }
+
+cat("Unified memory monitor configured.\n")
+
 ```
 
 ## Timing & Memory Tracking
@@ -491,19 +545,116 @@ cat(sprintf("Total model training episodes: %d\n\n", total_training_episodes))
 print(training_counts)
 ```
 
+```{r grid-sensitivity-analysis, eval=FALSE}
+# ============================================================================
+# GRID SIZE SENSITIVITY ANALYSIS
+# ============================================================================
+# Demonstrates how computational requirements scale with grid size
+# Only runs ElasticNet to minimize total runtime while showing scaling behavior
+# Set eval=TRUE to run this analysis
+# ============================================================================
+
+sensitivity_results <- tibble(
+  grid_size = integer(),
+  time_seconds = numeric(),
+  peak_rss_gb = numeric()
+)
+
+test_grid_sizes <- c(5, 15, 30)  # Test 3 configurations
+
+for (gs in test_grid_sizes) {
+  
+  cat(sprintf("\n--- Testing grid_size = %d ---\n", gs))
+  
+  # Create grid for this size
+  test_grid <- grid_random(
+    penalty(range = c(-5, 1)),
+    mixture(range = c(0, 1)),
+    size = gs
+  )
+  
+  # Create minimal CV splits (2-fold, 1 repeat for speed)
+  test_splits <- group_vfold_cv(df, group = center_id, v = 2, repeats = 1)
+  
+  # Time the tuning
+  start_time <- Sys.time()
+  start_mem <- as.numeric(pryr::mem_used()) / (1024^3)
+  
+  set.seed(123)
+  test_result <- tune_grid(
+    workflow() %>%
+      add_recipe(data_recipe) %>%
+      add_model(elnet_spec),
+    resamples = test_splits,
+    grid = test_grid,
+    metrics = metric_set(rmse),
+    control = control_grid(verbose = FALSE)
+  )
+  
+  end_time <- Sys.time()
+  end_mem <- as.numeric(pryr::mem_used()) / (1024^3)
+  
+  elapsed <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  
+  sensitivity_results <- sensitivity_results %>%
+    add_row(
+      grid_size = gs,
+      time_seconds = elapsed,
+      peak_rss_gb = max(start_mem, end_mem)
+    )
+  
+  cat(sprintf("   Time: %.1f seconds, Memory: %.2f GB\n", elapsed, end_mem))
+}
+
+# Plot scaling behavior
+sensitivity_plot <- ggplot(sensitivity_results, aes(x = grid_size, y = time_seconds)) +
+  geom_point(size = 4, color = "#2E86AB") +
+  geom_line(linewidth = 1, color = "#2E86AB") +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Computational Scaling: Grid Size vs. Tuning Time",
+    subtitle = "ElasticNet only, 2-fold CV, 1 repeat (demonstration of scaling behavior)",
+    x = "Hyperparameter Grid Size",
+    y = "Tuning Time (seconds)"
+  ) +
+  theme_minimal()
+
+print(sensitivity_plot)
+print(sensitivity_results)
+
+# Project to full workflow
+cat("\n--- Projected Full Workflow Times ---\n")
+# Assuming linear scaling, project what full 5-algorithm workflow would take
+for (i in 1:nrow(sensitivity_results)) {
+  gs <- sensitivity_results$grid_size[i]
+  time_sec <- sensitivity_results$time_seconds[i]
+  # Scale up: 5 algorithms, 5 folds, 2+ repeats
+  projected_min <- (time_sec * 5 * 2.5 * PARAMS$cv_repeats) / 60
+  cat(sprintf("   grid_size=%d: ~%.1f minutes projected\n", gs, projected_min))
+}
+```
+
 # PHASE 5: MODEL TRAINING {.tabset}
 
 ## Base Learner Tuning
 
 ```{r baselearner-tuning}
-# Start background memory monitoring
+# ============================================================================
+# START UNIFIED MEMORY MONITOR (runs for entire training + stacking + SHAP)
+# ============================================================================
 if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-if (file.exists("memory_log_tuning.csv")) file.remove("memory_log_tuning.csv")
+if (file.exists(MEMORY_LOG_FILE)) file.remove(MEMORY_LOG_FILE)
+if (file.exists(PHASE_MARKER_FILE)) file.remove(PHASE_MARKER_FILE)
 
-bg_monitor <- callr::r_bg(monitor_system_ram,
-                         args = list(log_file = "memory_log_tuning.csv"),
-                         supervise = TRUE)
-Sys.sleep(3)
+bg_monitor <- callr::r_bg(
+  monitor_unified_ram,
+  args = list(log_file = MEMORY_LOG_FILE, phase_file = PHASE_MARKER_FILE),
+  supervise = TRUE
+)
+Sys.sleep(3)  # Allow monitor to initialize
+
+# Set phase
+set_monitor_phase("Base Learner Tuning")
 
 # Create workflow set
 tic.clearlog()
@@ -547,26 +698,13 @@ cat(sprintf("\nTuning complete: %d models trained in %.1f minutes\n",
            total_training_episodes,
            (timing_baselearners$toc - timing_baselearners$tic) / 60))
 
-# Stop monitoring
-file.create("stop_monitoring.file")
-Sys.sleep(3)
-bg_monitor$kill()
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-
-record_memory("After base learner tuning")
 ```
 
 ## Stacked Ensemble Construction
 
 ```{r stacking}
-# Start monitoring
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-if (file.exists("memory_log_stacking.csv")) file.remove("memory_log_stacking.csv")
 
-bg_monitor <- callr::r_bg(monitor_system_ram,
-                         args = list(log_file = "memory_log_stacking.csv"),
-                         supervise = TRUE)
-Sys.sleep(3)
+set_monitor_phase("Stacking")
 
 tic.clearlog()
 tic("Stacking and meta-learner fitting")
@@ -600,12 +738,6 @@ save_timing("Stacking and meta-learner fitting", timing_stacking)
 
 cat("Final stacked ensemble fitted.\n")
 record_memory("After stacking and fitting")
-
-# Stop monitoring
-file.create("stop_monitoring.file")
-Sys.sleep(3)
-bg_monitor$kill()
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
 ```
 
 # PHASE 6: EVALUATION {.tabset}
@@ -822,6 +954,8 @@ full_performance_table %>%
 ## Permutation Importance
 
 ```{r permutation-importance}
+set_monitor_phase("Permutation Importance")
+
 # Create custom predict function for stacked model
 predict_function_stack <- function(model, newdata) {
  pred <- predict(model, newdata)
@@ -872,15 +1006,7 @@ cat("Permutation importance calculated.\n")
 # Exact SHAP requires 2^p coalition evaluations (for 26 predictors: >67 million
 # evaluations per observation). fastshap uses Monte Carlo sampling for ~50x speedup.
 # ============================================================================
-
-# Start monitoring
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-if (file.exists("memory_log_shap.csv")) file.remove("memory_log_shap.csv")
-
-bg_monitor <- callr::r_bg(monitor_system_ram,
-                         args = list(log_file = "memory_log_shap.csv"),
-                         supervise = TRUE)
-Sys.sleep(3)
+set_monitor_phase("SHAP Calculation")
 
 # Prediction wrapper
 pfun <- function(object, newdata) {
@@ -912,14 +1038,125 @@ shap_importance <- shap_values %>%
 
 record_memory("After SHAP calculation")
 
-# Stop monitoring
-file.create("stop_monitoring.file")
-Sys.sleep(3)
-bg_monitor$kill()
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-
 cat("SHAP values calculated.\n")
 ```
+
+```{r stop-monitor-and-plot, fig.width=12, fig.height=6}
+# ============================================================================
+# STOP MONITOR AND GENERATE MEMORY TIMELINE FIGURE
+# ============================================================================
+
+# Stop the unified monitor
+set_monitor_phase("Complete")
+Sys.sleep(2)
+file.create("stop_monitoring.file")
+Sys.sleep(3)
+tryCatch(bg_monitor$kill(), error = function(e) NULL)
+if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
+
+# Read the unified log
+if (file.exists(MEMORY_LOG_FILE)) {
+  memory_timeline <- read.csv(MEMORY_LOG_FILE, stringsAsFactors = FALSE)
+  
+  # Calculate key metrics
+  global_peak_rss_gb <- max(memory_timeline$rss_gb, na.rm = TRUE)
+  global_peak_vms_gb <- max(memory_timeline$vms_gb, na.rm = TRUE)
+  total_runtime_min <- max(memory_timeline$elapsed_sec, na.rm = TRUE) / 60
+  
+  # Find phase boundaries for annotation
+  phase_changes <- memory_timeline %>%
+    mutate(phase_change = phase != lag(phase, default = "")) %>%
+    filter(phase_change) %>%
+    select(elapsed_sec, phase) %>%
+    mutate(elapsed_min = elapsed_sec / 60)
+  
+  # Print summary
+  cat("\n")
+  cat("==================================================================\n")
+  cat("           GLOBAL MEMORY CONSUMPTION SUMMARY                      \n")
+  cat("==================================================================\n")
+  cat(sprintf("Peak Physical RAM (RSS): %.2f GB\n", global_peak_rss_gb))
+  cat(sprintf("Peak Virtual Memory (VMS): %.2f GB\n", global_peak_vms_gb))
+  cat(sprintf("Total Runtime: %.1f minutes (%.2f hours)\n", 
+              total_runtime_min, total_runtime_min / 60))
+  cat("------------------------------------------------------------------\n")
+  cat(sprintf("8GB Feasibility Threshold: %s\n", 
+              ifelse(global_peak_rss_gb < 8, "PASSED", "FAILED")))
+  cat(sprintf("Headroom: %.2f GB (%.1f%% of 8GB limit)\n",
+              8 - global_peak_rss_gb, 
+              100 * (8 - global_peak_rss_gb) / 8))
+  cat("==================================================================\n\n")
+  
+  # Store for later use in feasibility summary
+  feasibility_result <- list(
+    peak_rss_gb = global_peak_rss_gb,
+    peak_vms_gb = global_peak_vms_gb,
+    runtime_min = total_runtime_min,
+    passed_8gb = global_peak_rss_gb < 8
+  )
+  
+  # Create publication-quality figure
+  memory_plot <- memory_timeline %>%
+    mutate(elapsed_min = elapsed_sec / 60) %>%
+    pivot_longer(cols = c(rss_gb, vms_gb), 
+                 names_to = "memory_type", 
+                 values_to = "gb") %>%
+    mutate(memory_type = case_when(
+      memory_type == "rss_gb" ~ "Physical RAM (RSS)",
+      memory_type == "vms_gb" ~ "Virtual Memory (VMS)"
+    )) %>%
+    ggplot(aes(x = elapsed_min, y = gb, color = memory_type)) +
+    geom_line(linewidth = 0.8, alpha = 0.8) +
+    # Add 8GB threshold line
+    geom_hline(yintercept = 8, linetype = "dashed", color = "red", linewidth = 1) +
+    annotate("text", x = max(memory_timeline$elapsed_sec/60) * 0.02, y = 8.3, 
+             label = "8GB Feasibility Threshold", hjust = 0, color = "red", 
+             fontface = "bold", size = 3.5) +
+    # Add phase boundary lines
+    geom_vline(data = phase_changes, aes(xintercept = elapsed_min),
+               linetype = "dotted", color = "gray40", alpha = 0.7) +
+    # Add phase labels at top
+    geom_text(data = phase_changes, 
+              aes(x = elapsed_min, y = max(memory_timeline$vms_gb, na.rm = TRUE) * 0.95, 
+                  label = phase),
+              angle = 90, hjust = 1, vjust = -0.5, size = 3, color = "gray30") +
+    scale_color_manual(values = c("Physical RAM (RSS)" = "#2E86AB", 
+                                   "Virtual Memory (VMS)" = "#A23B72")) +
+    labs(
+      title = "Memory Consumption Throughout Stacked Ensemble Workflow",
+      subtitle = sprintf("Peak RSS: %.2f GB | Runtime: %.1f min | 8GB Threshold: %s",
+                        global_peak_rss_gb, total_runtime_min,
+                        ifelse(global_peak_rss_gb < 8, "PASSED", "FAILED")),
+      x = "Elapsed Time (minutes)",
+      y = "Memory (GB)",
+      color = "Memory Type"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 11, color = "gray30"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    ) +
+    coord_cartesian(ylim = c(0, max(10, global_peak_vms_gb * 1.1)))
+  
+  print(memory_plot)
+  
+  # Save high-res version
+  ggsave("memory_timeline.png", memory_plot, width = 12, height = 6, dpi = 300)
+  cat("Memory timeline figure saved as memory_timeline.png\n")
+  
+} else {
+  warning("Memory log file not found. Monitor may not have run correctly.")
+  feasibility_result <- list(
+    peak_rss_gb = NA,
+    peak_vms_gb = NA,
+    runtime_min = NA,
+    passed_8gb = NA
+  )
+}
+```
+
 
 # PHASE 8: FEASIBILITY REPORTING {.tabset}
 
@@ -987,6 +1224,88 @@ ggplot(weights_plot_data,
    axis.title = element_text(size = 11, face = "bold"),
    panel.grid.major.y = element_blank()
  )
+```
+
+```{r feasibility-tradeoff-figure, fig.width=10, fig.height=7}
+# ============================================================================
+# FEASIBILITY TRADE-OFF FIGURE
+# ============================================================================
+# Shows the performance-computation trade-off: what you get for your compute
+# ============================================================================
+
+# Extract per-model best performance
+model_performance <- model_set_results %>%
+  rank_results(select_best = TRUE) %>%
+  filter(.metric == "rmse") %>%
+  select(wflow_id, mean, std_err) %>%
+  mutate(
+    model = case_when(
+      str_detect(wflow_id, "elnet") ~ "ElasticNet",
+      str_detect(wflow_id, "rf") ~ "Random Forest",
+      str_detect(wflow_id, "xgb") ~ "XGBoost",
+      str_detect(wflow_id, "svm") ~ "SVM",
+      str_detect(wflow_id, "mars") ~ "MARS"
+    ),
+    ci_lower = mean - 1.96 * std_err,
+    ci_upper = mean + 1.96 * std_err,
+    type = "Base Learner"
+  )
+
+# Add stack performance
+stack_perf <- final_cv_metrics %>%
+  filter(.metric == "rmse") %>%
+  mutate(
+    model = "Stacked Ensemble",
+    ci_lower = mean - 1.96 * std_err,
+    ci_upper = mean + 1.96 * std_err,
+    type = "Ensemble",
+    wflow_id = "stack"
+  ) %>%
+  select(wflow_id, mean, std_err, model, ci_lower, ci_upper, type)
+
+# Get training episodes per model
+training_effort <- training_counts %>%
+  mutate(model = Model) %>%
+  select(model, Total_Models)
+
+# Combine
+plot_data <- bind_rows(model_performance, stack_perf) %>%
+  left_join(training_effort, by = "model") %>%
+  mutate(
+    # Stack uses all training episodes
+    Total_Models = ifelse(model == "Stacked Ensemble", 
+                          total_training_episodes, 
+                          Total_Models)
+  )
+
+# Create figure
+tradeoff_plot <- ggplot(plot_data, aes(x = Total_Models, y = mean, color = type)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0, linewidth = 1) +
+  geom_text(aes(label = model), vjust = -1.5, hjust = 0.5, size = 3.5) +
+  scale_color_manual(values = c("Base Learner" = "#2E86AB", "Ensemble" = "#E94F37")) +
+  labs(
+    title = "Performance vs. Computational Investment",
+    subtitle = "Trade-off between model training effort and prediction accuracy",
+    x = "Training Episodes (model fits)",
+    y = "RMSE (lower is better)",
+    color = "Model Type"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "gray30"),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  ) +
+  # Expand x-axis slightly for labels
+  scale_x_continuous(expand = expansion(mult = c(0.05, 0.15)))
+
+print(tradeoff_plot)
+
+# Save
+ggsave("feasibility_tradeoff.png", tradeoff_plot, width = 10, height = 7, dpi = 300)
+cat("Feasibility trade-off figure saved.\n")
 ```
 
 ## Deployment Metrics
@@ -1212,41 +1531,70 @@ cat(sprintf("  Standard grids would require: %.2f hours (%.1fx increase)\n",
 
 ```{r feasibility-summary}
 # ============================================================================
-# DYNAMIC FEASIBILITY SUMMARY (replaces hardcoded claims)
+# DYNAMIC FEASIBILITY SUMMARY
 # ============================================================================
 
-peak_memory_gb <- max(memory_results$memory_gb, na.rm = TRUE)
-total_time_hours <- sum(timing_results$wall_time_seconds) / 3600
+peak_memory_gb <- ifelse(exists("feasibility_result") && !is.na(feasibility_result$peak_rss_gb),
+                         feasibility_result$peak_rss_gb,
+                         max(memory_results$memory_gb, na.rm = TRUE))
 
-cat("=== WORKFLOW FEASIBILITY RESULTS ===\n\n")
+total_time_hours <- sum(timing_results$wall_time_seconds, na.rm = TRUE) / 3600
+total_time_min <- sum(timing_results$wall_time_seconds, na.rm = TRUE) / 60
+
+cat("==================================================================\n")
+cat("           WORKFLOW FEASIBILITY RESULTS                          \n")
+cat("==================================================================\n\n")
 
 cat("1. WORKFLOW COMPLETION: SUCCESS\n")
 cat("   The complete stacked ensemble workflow executed successfully on\n")
 cat("   standard laptop hardware without cloud computing or GPU acceleration.\n\n")
 
-cat("2. COMPUTATIONAL RESOURCE CONSUMPTION:\n")
-cat(sprintf("   - Total execution time: %.2f hours\n", total_time_hours))
-cat(sprintf("   - Peak memory usage: %.2f GB\n", peak_memory_gb))
-cat(sprintf("   - Within 8GB limit: %s\n\n",
-           ifelse(peak_memory_gb < 8, "YES", "NO")))
+cat("2. RESOURCE CONSUMPTION:\n")
+cat(sprintf("   - Total execution time: %.1f minutes (%.2f hours)\n", 
+            total_time_min, total_time_hours))
+cat(sprintf("   - Peak physical RAM (RSS): %.2f GB\n", peak_memory_gb))
+cat(sprintf("   - 8GB feasibility threshold: %s\n",
+            ifelse(peak_memory_gb < 8, "PASSED", "FAILED")))
+cat(sprintf("   - Headroom remaining: %.2f GB\n\n", 8 - peak_memory_gb))
 
 cat("3. TRAINING COMPLEXITY:\n")
 cat(sprintf("   - Total model training episodes: %d\n", total_training_episodes))
-cat(sprintf("   - Base learner candidates: %d\n", ncol(df_stack) - 1))
-cat(sprintf("   - Members selected by meta-learner: %d (%.1f%% selection rate)\n",
-           meta_coef_summary$selected_members,
-           100 * meta_coef_summary$selection_rate))
+cat(sprintf("   - Cross-validation configuration: %d-fold x %d repeats\n",
+            PARAMS$cv_folds, PARAMS$cv_repeats))
+cat(sprintf("   - Base learner candidates generated: %d\n", ncol(df_stack) - 1))
+cat(sprintf("   - Members selected by meta-learner: %d (%.1f%% selection rate)\n\n",
+            meta_coef_summary$selected_members,
+            100 * meta_coef_summary$selection_rate))
 
-cat("\n4. ENSEMBLE CONSTRUCTION:\n")
-cat(sprintf("   - Dominant model contribution: %s (%.1f%% of weight)\n",
-           meta_coef_summary$dominant_model,
-           meta_coef_summary$dominant_weight_pct))
+cat("4. ENSEMBLE COMPOSITION:\n")
+cat(sprintf("   - Dominant model type: %s (%.1f%% of weight)\n",
+            meta_coef_summary$dominant_model,
+            meta_coef_summary$dominant_weight_pct))
 
-cat("\n=== CONCLUSION ===\n")
-cat("All workflow components completed successfully within resource constraints\n")
-cat("typical of standard laptop hardware. Peak memory remained below 8GB, and\n")
-cat(sprintf("total execution time was %.2f hours, demonstrating feasibility for\n", total_time_hours))
-cat("overnight computation on consumer hardware.\n")
+cat("\n5. DEPLOYMENT FEASIBILITY:\n")
+cat(sprintf("   - Model RAM footprint: %.2f MB\n", 
+            deployment_metrics$Value[deployment_metrics$Metric == "Model Object Size (RAM)"]))
+cat(sprintf("   - Serialized model size: %.2f MB\n",
+            deployment_metrics$Value[deployment_metrics$Metric == "Serialized Model Size (Disk)"]))
+cat(sprintf("   - Inference latency: %.2f ms per prediction\n",
+            deployment_metrics$Value[deployment_metrics$Metric == "Inference Latency"]))
+
+cat("\n==================================================================\n")
+cat("                         CONCLUSION                              \n")
+cat("==================================================================\n")
+if (peak_memory_gb < 8 && total_time_hours < 8) {
+  cat("All workflow components completed successfully within the defined\n")
+  cat("resource constraints (8GB RAM, overnight execution). This demonstrates\n")
+  cat("that stacked ensemble methods are feasible for deployment in\n")
+  cat("resource-constrained research settings.\n")
+} else {
+  cat("WARNING: Workflow exceeded one or more feasibility thresholds.\n")
+  cat(sprintf("   - RAM: %.2f GB (threshold: 8GB) - %s\n", 
+              peak_memory_gb, ifelse(peak_memory_gb < 8, "OK", "EXCEEDED")))
+  cat(sprintf("   - Time: %.2f hours (threshold: 8 hours) - %s\n",
+              total_time_hours, ifelse(total_time_hours < 8, "OK", "EXCEEDED")))
+}
+cat("==================================================================\n")
 ```
 
 ## Timing Summary Table
