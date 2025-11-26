@@ -1466,24 +1466,31 @@ cat(sprintf("\nThroughput: ~%.0f predictions per second\n", 1000/latency_ms))
 # Calculate total package dependency footprint
 
 core_pkgs <- c("tidymodels", "stacks", "glmnet", "ranger", "xgboost",
-              "kernlab", "earth", "doFuture", "tictoc", "pryr",
-              "dplyr", "tidyr", "purrr", "tibble", "stringr", "forcats",
-              "ggplot2", "gtsummary", "gt", "broom", "viridis",
-              "DALEX", "DALEXtra", "fastshap", "yardstick", "probably",
-              "callr", "ps")
+               "kernlab", "earth", "doFuture", "tictoc", "pryr",
+               "dplyr", "tidyr", "purrr", "tibble", "stringr", "forcats",
+               "ggplot2", "gtsummary", "gt", "broom", "viridis",
+               "DALEX", "DALEXtra", "fastshap", "yardstick", "probably",
+               "callr", "ps")
 
-all_deps <- tools::package_dependencies(core_pkgs, recursive = TRUE)
+# FIX: Use local installed packages database instead of querying CRAN
+# This prevents the "CRAN mirror" error and works offline
+local_db <- installed.packages()
+
+all_deps <- tools::package_dependencies(core_pkgs, db = local_db, recursive = TRUE)
 all_pkgs_unique <- unique(c(core_pkgs, unlist(all_deps)))
-all_pkgs_unique <- all_pkgs_unique[all_pkgs_unique %in% installed.packages()[, "Package"]]
+
+# Filter to ensure we only look for packages that actually exist in the local library
+# (This handles cases where a dependency might be optional or missing)
+all_pkgs_unique <- all_pkgs_unique[all_pkgs_unique %in% local_db[, "Package"]]
 
 # Estimate installation size
 total_size_bytes <- 0
 for (pkg in all_pkgs_unique) {
- loc <- system.file(package = pkg)
- if (loc != "") {
-   files <- list.files(loc, recursive = TRUE, full.names = TRUE)
-   total_size_bytes <- total_size_bytes + sum(file.info(files)$size, na.rm = TRUE)
- }
+  loc <- system.file(package = pkg)
+  if (loc != "") {
+    files <- list.files(loc, recursive = TRUE, full.names = TRUE)
+    total_size_bytes <- total_size_bytes + sum(file.info(files)$size, na.rm = TRUE)
+  }
 }
 total_size_mb <- total_size_bytes / (1024^2)
 
