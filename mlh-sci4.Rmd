@@ -165,10 +165,10 @@ print(hardware_specs)
 # Control knobs
   cv_folds = 5                # Number of CV folds
   cv_repeats = 2              # Number of repeats
-  trees_n = 1000              # Number of trees
+  trees_n = 500              # Number of trees
   grid_size = 15              # Grid size
-  bootstrap_iters = 1000      # For CI calculation
-  shap_nsim = 100             # Fastshap simulations
+  bootstrap_iters = 100      # For CI calculation
+  shap_nsim = 10             # Fastshap simulations
   mcid_val = 4                # MCID threshold
   recovery_thresh = 60        # Binary classification threshold
 ```
