@@ -57,7 +57,7 @@ knitr::opts_chunk$set(
  warning = FALSE,
  message = FALSE,
  fig.align = 'center',
- dpi = 300,
+ dpi = 600,
  cache = FALSE
 )
 ```
@@ -170,16 +170,15 @@ print(hardware_specs)
 PARAMS <- list(
  # Cross-validation
  cv_folds = 5,
- cv_repeats = 2,
+ cv_repeats = 5,
  
  # Model complexity
- trees_n = 1000,
- grid_size = 10,
+ grid_size = 25,
  
  # Evaluation
- bootstrap_iters = 50,
- dalex_b = 10,
- shap_nsim = 5,
+ bootstrap_iters = 1000,
+ dalex_b = 100,
+ shap_nsim = 100,
  
  # Clinical thresholds (for secondary analyses)
  mcid_val = 4,
@@ -393,6 +392,7 @@ data_recipe <- recipe(motor_score_12m ~ ., data = df) %>%
  update_role(patient_id_global, new_role = "ID") %>%
  update_role(center_id, new_role = "ID") %>%
  # Preprocessing steps
+ step_novel(all_nominal_predictors()) %>%
  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
  step_normalize(all_numeric_predictors(),
                 -all_of(c("patient_id", "patient_id_global", "center_id"))) %>%
@@ -492,7 +492,7 @@ elnet_grid <- grid_random(
 rf_grid <- grid_regular(
  mtry(range = c(5, 20)),
  min_n(range = c(5, 15)),
- levels = c(mtry = 4, min_n = 5)
+ levels = c(mtry = 5, min_n = 5)
 )
 
 # XGBoost: 5D random grid
@@ -507,7 +507,7 @@ xgb_grid <- grid_random(
 
 # SVM: 2D random grid
 svm_grid <- grid_random(
- cost(range = c(-5, 5)),
+ cost(range = c(-5, 2)),
  rbf_sigma(range = c(-5, 0)),
  size = PARAMS$grid_size
 )
@@ -516,7 +516,7 @@ svm_grid <- grid_random(
 mars_grid <- grid_regular(
  num_terms(range = c(5, 25)),
  prod_degree(range = c(1L, 2L)),
- levels = c(num_terms = 4, prod_degree = 5)
+ levels = c(num_terms = 5, prod_degree = 5)
 )
 
 cat("Hyperparameter grids defined.\n")
@@ -544,6 +544,8 @@ total_training_episodes <- sum(training_counts$Total_Models)
 cat(sprintf("\n=== TRAINING COMPLEXITY ===\n"))
 cat(sprintf("Total model training episodes: %d\n\n", total_training_episodes))
 print(training_counts)
+
+gc() #call garbage collection 
 ```
 
 ```{r grid-sensitivity-analysis, eval=FALSE}
@@ -652,6 +654,10 @@ bg_monitor <- callr::r_bg(
   args = list(log_file = MEMORY_LOG_FILE, phase_file = PHASE_MARKER_FILE),
   supervise = TRUE
 )
+on.exit({
+  try({ bg_monitor$kill() }, silent = TRUE)
+  if(file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
+}, add = TRUE)
 Sys.sleep(3)  # Allow monitor to initialize
 
 # Set phase
@@ -739,6 +745,8 @@ save_timing("Stacking and meta-learner fitting", timing_stacking)
 
 cat("Final stacked ensemble fitted.\n")
 record_memory("After stacking and fitting")
+
+gc() #call garbage collection 
 ```
 
 # PHASE 6: EVALUATION {.tabset}
@@ -867,6 +875,8 @@ save_timing("Bootstrap CIs", timing_bootstrap)
 
 cat("Bootstrap 95% Confidence Intervals:\n")
 print(bootstrap_ci)
+
+gc() #call garbage collection 
 ```
 
 ## Performance Metrics Table
@@ -999,6 +1009,85 @@ cat("Permutation importance calculated.\n")
 
 ## SHAP Values
 
+```{r adaptive-shap-workers}
+# 1. Robust RAM Detection Helper
+get_system_ram_gb <- function() {
+  tryCatch({
+    if (Sys.info()[["sysname"]] == "Windows") {
+      # Windows: Use wmic
+      ram_bytes <- system("wmic computersystem get totalphysicalmemory", intern = TRUE)
+      as.numeric(grep("\\d+", ram_bytes, value = TRUE)) / (1024^3)
+    } else {
+      # Linux/macOS: Use generic detection via system command
+      if (file.exists("/proc/meminfo")) {
+        # Linux
+        mem_info <- readLines("/proc/meminfo")
+        total_kb <- as.numeric(gsub("\\D", "", grep("MemTotal", mem_info, value = TRUE)))
+        total_kb / (1024^2)
+      } else {
+        # macOS fallback
+        as.numeric(substring(system("sysctl hw.memsize", intern = TRUE), 13)) / (1024^3)
+      }
+    }
+  }, error = function(e) {
+    # Fail-safe default: Assume constrained environment (8GB)
+    warning("Could not detect system RAM. Defaulting to conservative 8GB limit.")
+    return(8) 
+  })
+}
+
+# 2. Get Metrics
+system_ram_gb <- get_system_ram_gb()
+model_size_gb <- as.numeric(lobstr::obj_size(df_stack_fitted)) / (1024^3)
+safety_threshold_gb <- 8.0 
+
+# 3. Determine Base Worker Count
+if (system_ram_gb <= (safety_threshold_gb + 0.5)) {
+  # Constrained Mode (<= ~8GB)
+  proposed_workers <- min(2, num_workers)
+  mode_msg <- "CONSTRAINED MODE (<= 8GB RAM)"
+} else {
+  # Performance Mode (> 8GB)
+  proposed_workers <- min(4, num_workers)
+  mode_msg <- "PERFORMANCE MODE (> 8GB RAM)"
+}
+
+# 4. Safety Override (The "Anti-Crash" Check)
+# In multisession (socket) parallelization, each worker copies the model object.
+# We need: (Model_Size * Workers) + Overhead < System RAM
+est_memory_load <- model_size_gb * proposed_workers
+safe_limit <- system_ram_gb * 0.60 # Leave 40% for OS and overhead
+
+if (est_memory_load > safe_limit) {
+  shap_workers <- 1
+  warning_msg <- sprintf("Memory safety override triggered. Model (%.2f GB) too large for parallel workers.", model_size_gb)
+} else {
+  shap_workers <- proposed_workers
+  warning_msg <- NULL
+}
+
+# 5. Report Configuration
+cat(sprintf("\n--- SHAP PARALLEL CONFIGURATION ---\n"))
+cat(sprintf("System RAM detected: %.2f GB\n", system_ram_gb))
+cat(sprintf("Model object size:   %.2f GB\n", model_size_gb))
+cat(sprintf("Mode:                %s\n", mode_msg))
+if (!is.null(warning_msg)) cat(sprintf("WARNING: %s\n", warning_msg))
+cat(sprintf("Final Worker Count:  %d\n", shap_workers))
+cat("-----------------------------------\n\n")
+
+# 6. Apply Configuration
+# Clean memory before starting heavy task
+gc() 
+
+original_plan <- plan() 
+if (shap_workers > 1) {
+  plan(multisession, workers = shap_workers)
+} else {
+  plan(sequential)
+}
+```
+
+
 ```{r shap-values, eval=TRUE}
 # ============================================================================
 # PRAGMATIC ADAPTATION #4: Approximate SHAP via fastshap
@@ -1016,18 +1105,6 @@ pfun <- function(object, newdata) {
 
 tic.clearlog()
 tic("SHAP calculation")
-
-# We temporarily throttle the worker count to a safe number
-shap_workers <- min(max(1, floor(num_workers * 0.5)), 4)
-cat(sprintf("Throttling parallel workers to %d for memory safety during SHAP...\n", 
-            shap_workers))
-
-# Re-plan for this specific heavy task
-# This uses your existing doFuture setup but limits the active sessions.
-original_plan <- plan() # Save original plan
-plan(multisession, workers = shap_workers) 
-
-set.seed(123)
 
 set.seed(123)
 shap_values <- fastshap::explain(
@@ -1341,6 +1418,7 @@ model_ram_size_mb <- as.numeric(lobstr::obj_size(df_stack_fitted)) / (1024^2)
 saveRDS(df_stack_fitted, "temp_final_model.rds", compress = "xz")
 model_disk_size_mb <- file.size("temp_final_model.rds") / (1024^2)
 file.remove("temp_final_model.rds")
+gc()
 
 # 3. Single-patient inference latency
 new_patient_profile <- df[1, ] %>% select(-motor_score_12m)
