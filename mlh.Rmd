@@ -2879,7 +2879,7 @@ We evaluate the model's clinical utility by defining a Minimal Clinically Import
 ```{r eval-util, fig.width=10, fig.height=7}
 
 # Define Minimal Clinically Important Difference (MCID)
-MCID <- 4
+MCID <- mcid_val
 
 # Create binary outcomes based on MCID
 clinical_data <- plot_data_cv %>%
@@ -2921,7 +2921,7 @@ We test the model's classification utility by setting a recovery threshold and g
 # Define a clinically meaningful binary outcome
 # This is a separate evaluation from the regression (MCID) utility
 # Example: "Achieved a high recovery score" (e.g., > 50)
-RECOVERY_THRESHOLD <- 60
+RECOVERY_THRESHOLD <- recovery_thresh
 
 # Create the binary 'truth' column
 # We must use factors and set the "positive" class as the first level
