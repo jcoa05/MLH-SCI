@@ -171,7 +171,7 @@ print(hardware_specs)
 PARAMS <- list(
  # Cross-validation
  cv_folds = 5,
- cv_repeats = 5,
+ cv_repeats = 3,
  
  # Model complexity
  grid_size = 25,
