@@ -1,6 +1,6 @@
 ---
 title: "Pragmatic implementation of stacked ensemble learning in resource-constrained clinical research: a methodological demonstration"
-subtitle: "Supplementary Code for Machine Learning: Health Submission"
+subtitle: "Supplementary code"
 author: "Authors"
 date: "`r Sys.Date()`"
 output:
@@ -16,36 +16,6 @@ output:
     fig_width: 8
     fig_height: 6
 ---
-
-<!-- 
-================================================================================
-DOCUMENT STRUCTURE (for navigation)
-================================================================================
-PHASE 1: ENVIRONMENT SETUP (Lines ~30-200)
-  - Global options, packages, parallelization, hardware detection
-
-PHASE 2: CONFIGURATION (Lines ~200-350)
-  - Control knobs, monitoring functions, timing/memory tracking
-
-PHASE 3: DATA & PREPROCESSING (Lines ~350-500)
-  - Data loading, cross-validation strategy, preprocessing recipe
-
-PHASE 4: MODEL SPECIFICATION (Lines ~500-700)
-  - Base learner specs, hyperparameter grids, training count calculation
-
-PHASE 5: MODEL TRAINING (Lines ~700-900)
-  - Base learner tuning, stacked ensemble construction
-
-PHASE 6: EVALUATION (Lines ~900-1200)
-  - Two-stage CV evaluation, bootstrap CIs, performance metrics
-
-PHASE 7: EXPLAINABILITY (Lines ~1200-1400)
-  - Permutation importance, SHAP values (optional)
-
-PHASE 8: FEASIBILITY REPORTING (Lines ~1400-1700)
-  - Deployment metrics, resource consumption, final tables
-================================================================================
--->
 
 # PHASE 1: ENVIRONMENT SETUP {.tabset}
 
@@ -163,9 +133,6 @@ print(hardware_specs)
 ## Control Knobs
 
 ```{r control-knobs}
-# ============================================================================
-# CENTRALIZED PARAMETERS
-# ============================================================================
 # All tunable parameters in one location for easy modification
 
 PARAMS <- list(
