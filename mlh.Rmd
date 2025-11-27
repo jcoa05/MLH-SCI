@@ -1081,11 +1081,11 @@ if (file.exists(MEMORY_LOG_FILE)) {
   cat(sprintf("Total Runtime: %.1f minutes (%.2f hours)\n", 
               total_runtime_min, total_runtime_min / 60))
   cat("------------------------------------------------------------------\n")
-  cat(sprintf("8GB Feasibility Threshold: %s\n", 
-              ifelse(global_peak_rss_gb < 8, "PASSED", "FAILED")))
-  cat(sprintf("Headroom: %.2f GB (%.1f%% of 8GB limit)\n",
-              8 - global_peak_rss_gb, 
-              100 * (8 - global_peak_rss_gb) / 8))
+  cat(sprintf("4GB Feasibility Threshold: %s\n", 
+              ifelse(global_peak_rss_gb < 4, "PASSED", "FAILED")))
+  cat(sprintf("Headroom: %.2f GB (%.1f%% of 4GB limit)\n",
+              4 - global_peak_rss_gb, 
+              100 * (4 - global_peak_rss_gb) / 4))
   cat("==================================================================\n\n")
   
   # Store for later use in feasibility summary
@@ -1093,7 +1093,7 @@ if (file.exists(MEMORY_LOG_FILE)) {
     peak_rss_gb = global_peak_rss_gb,
     peak_vms_gb = global_peak_vms_gb,
     runtime_min = total_runtime_min,
-    passed_8gb = global_peak_rss_gb < 8
+    passed_4gb = global_peak_rss_gb < 4
   )
   
   # Create publication-quality figure
@@ -1108,10 +1108,10 @@ if (file.exists(MEMORY_LOG_FILE)) {
     )) %>%
     ggplot(aes(x = elapsed_min, y = gb, color = memory_type)) +
     geom_line(linewidth = 0.8, alpha = 0.8) +
-    # Add 8GB threshold line
-    geom_hline(yintercept = 8, linetype = "dashed", color = "red", linewidth = 1) +
+    # Add 4GB threshold line
+    geom_hline(yintercept = 4, linetype = "dashed", color = "red", linewidth = 1) +
     annotate("text", x = max(memory_timeline$elapsed_sec/60) * 0.02, y = 8.3, 
-             label = "8GB Feasibility Threshold", hjust = 0, color = "red", 
+             label = "4GB Feasibility Threshold", hjust = 0, color = "red", 
              fontface = "bold", size = 3.5) +
     # Add phase boundary lines
     geom_vline(data = phase_changes, aes(xintercept = elapsed_min),
@@ -1125,9 +1125,9 @@ if (file.exists(MEMORY_LOG_FILE)) {
                                    "Virtual Memory (VMS)" = "#A23B72")) +
     labs(
       title = "Memory Consumption Throughout Stacked Ensemble Workflow",
-      subtitle = sprintf("Peak RSS: %.2f GB | Runtime: %.1f min | 8GB Threshold: %s",
+      subtitle = sprintf("Peak RSS: %.2f GB | Runtime: %.1f min | 4GB Threshold: %s",
                         global_peak_rss_gb, total_runtime_min,
-                        ifelse(global_peak_rss_gb < 8, "PASSED", "FAILED")),
+                        ifelse(global_peak_rss_gb < 4, "PASSED", "FAILED")),
       x = "Elapsed Time (minutes)",
       y = "Memory (GB)",
       color = "Memory Type"
@@ -1153,7 +1153,7 @@ if (file.exists(MEMORY_LOG_FILE)) {
     peak_rss_gb = NA,
     peak_vms_gb = NA,
     runtime_min = NA,
-    passed_8gb = NA
+    passed_4gb = NA
   )
 }
 ```
@@ -1561,9 +1561,9 @@ cat("2. RESOURCE CONSUMPTION:\n")
 cat(sprintf("   - Total execution time: %.1f minutes (%.2f hours)\n", 
             total_time_min, total_time_hours))
 cat(sprintf("   - Peak physical RAM (RSS): %.2f GB\n", peak_memory_gb))
-cat(sprintf("   - 8GB feasibility threshold: %s\n",
-            ifelse(peak_memory_gb < 8, "PASSED", "FAILED")))
-cat(sprintf("   - Headroom remaining: %.2f GB\n\n", 8 - peak_memory_gb))
+cat(sprintf("   - 4GB feasibility threshold: %s\n",
+            ifelse(peak_memory_gb < 4, "PASSED", "FAILED")))
+cat(sprintf("   - Headroom remaining: %.2f GB\n\n", 4 - peak_memory_gb))
 
 cat("3. TRAINING COMPLEXITY:\n")
 cat(sprintf("   - Total model training episodes: %d\n", total_training_episodes))
@@ -1590,15 +1590,15 @@ cat(sprintf("   - Inference latency: %.2f ms per prediction\n",
 cat("\n==================================================================\n")
 cat("                         CONCLUSION                              \n")
 cat("==================================================================\n")
-if (peak_memory_gb < 8 && total_time_hours < 8) {
+if (peak_memory_gb < 4 && total_time_hours < 8) {
   cat("All workflow components completed successfully within the defined\n")
-  cat("resource constraints (8GB RAM, overnight execution). This demonstrates\n")
+  cat("resource constraints (4GB RAM, overnight execution). This demonstrates\n")
   cat("that stacked ensemble methods are feasible for deployment in\n")
   cat("resource-constrained research settings.\n")
 } else {
   cat("WARNING: Workflow exceeded one or more feasibility thresholds.\n")
-  cat(sprintf("   - RAM: %.2f GB (threshold: 8GB) - %s\n", 
-              peak_memory_gb, ifelse(peak_memory_gb < 8, "OK", "EXCEEDED")))
+  cat(sprintf("   - RAM: %.2f GB (threshold: 4GB) - %s\n", 
+              peak_memory_gb, ifelse(peak_memory_gb < 4, "OK", "EXCEEDED")))
   cat(sprintf("   - Time: %.2f hours (threshold: 8 hours) - %s\n",
               total_time_hours, ifelse(total_time_hours < 8, "OK", "EXCEEDED")))
 }
@@ -2001,9 +2001,9 @@ if (!is.na(peak_vms)) {
 } else {
   cat("PEAK_VMS_GB: NA\n")
 }
-cat(sprintf("UNDER_8GB_THRESHOLD: %s\n", ifelse(peak_rss < 8, "TRUE", "FALSE")))
-cat(sprintf("HEADROOM_GB: %.4f\n", 8 - peak_rss))
-cat(sprintf("HEADROOM_PCT: %.1f\n", 100 * (8 - peak_rss) / 8))
+cat(sprintf("UNDER_4GB_THRESHOLD: %s\n", ifelse(peak_rss < 4, "TRUE", "FALSE")))
+cat(sprintf("HEADROOM_GB: %.4f\n", 4 - peak_rss))
+cat(sprintf("HEADROOM_PCT: %.1f\n", 100 * (4 - peak_rss) / 4))
 
 cat("\nMEMORY_BY_COMPONENT:\n")
 for (i in 1:nrow(memory_results)) {
@@ -2153,9 +2153,9 @@ cat("\n")
 cat("==== SECTION 20: FEASIBILITY SUMMARY ====\n\n")
 
 cat(sprintf("WORKFLOW_COMPLETED: TRUE\n"))
-cat(sprintf("MEMORY_FEASIBLE: %s\n", ifelse(peak_rss < 8, "TRUE", "FALSE")))
+cat(sprintf("MEMORY_FEASIBLE: %s\n", ifelse(peak_rss < 4, "TRUE", "FALSE")))
 cat(sprintf("TIME_FEASIBLE: %s\n", ifelse(total_time_hours < 8, "TRUE", "FALSE")))
-cat(sprintf("OVERALL_FEASIBLE: %s\n", ifelse(peak_rss < 8 && total_time_hours < 8, "TRUE", "FALSE")))
+cat(sprintf("OVERALL_FEASIBLE: %s\n", ifelse(peak_rss < 4 && total_time_hours < 8, "TRUE", "FALSE")))
 
 cat("\n")
 cat("================================================================================\n")
@@ -2314,7 +2314,7 @@ cat(sprintf("  Explainability speedup (fastshap): ~50x faster than exact SHAP\n"
 
 cat("\n=== CONCLUSION ===\n")
 cat("All workflow components completed successfully within resource constraints\n")
-cat("typical of standard laptop hardware. Peak memory remained below 8GB, and\n")
+cat("typical of standard laptop hardware. Peak memory remained below 4GB, and\n")
 cat("total execution time was under 3 hours, demonstrating feasibility for\n")
 cat("overnight computation on consumer hardware.\n")
 ```
