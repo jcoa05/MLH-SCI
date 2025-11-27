@@ -315,6 +315,23 @@ record_memory("Baseline (after package loading)")
 ## Data Loading
 
 ```{r data-load}
+# ============================================================================
+# START UNIFIED MEMORY MONITOR (runs for entire training + stacking + SHAP)
+# ============================================================================
+if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
+if (file.exists(MEMORY_LOG_FILE)) file.remove(MEMORY_LOG_FILE)
+if (file.exists(PHASE_MARKER_FILE)) file.remove(PHASE_MARKER_FILE)
+
+bg_monitor <- callr::r_bg(
+  monitor_unified_ram,
+  args = list(log_file = MEMORY_LOG_FILE, phase_file = PHASE_MARKER_FILE),
+  supervise = TRUE
+)
+on.exit({
+  try({ bg_monitor$kill() }, silent = TRUE)
+  if(file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
+}, add = TRUE)
+Sys.sleep(3)  # Allow monitor to initialize
 df <- read.csv("data.csv")
 
 cat(sprintf("Dataset loaded: %d observations, %d variables\n", nrow(df), ncol(df)))
@@ -610,24 +627,6 @@ for (i in 1:nrow(sensitivity_results)) {
 ## Base Learner Tuning
 
 ```{r baselearner-tuning}
-# ============================================================================
-# START UNIFIED MEMORY MONITOR (runs for entire training + stacking + SHAP)
-# ============================================================================
-if (file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-if (file.exists(MEMORY_LOG_FILE)) file.remove(MEMORY_LOG_FILE)
-if (file.exists(PHASE_MARKER_FILE)) file.remove(PHASE_MARKER_FILE)
-
-bg_monitor <- callr::r_bg(
-  monitor_unified_ram,
-  args = list(log_file = MEMORY_LOG_FILE, phase_file = PHASE_MARKER_FILE),
-  supervise = TRUE
-)
-on.exit({
-  try({ bg_monitor$kill() }, silent = TRUE)
-  if(file.exists("stop_monitoring.file")) file.remove("stop_monitoring.file")
-}, add = TRUE)
-Sys.sleep(3)  # Allow monitor to initialize
-
 # Set phase
 set_monitor_phase("Base Learner Tuning")
 
@@ -977,73 +976,11 @@ cat("Permutation importance calculated.\n")
 
 ## SHAP Values
 
-```{r adaptive-shap-workers}
-# 1. Robust RAM Detection Helper
-get_system_ram_gb <- function() {
-  tryCatch({
-    if (Sys.info()[["sysname"]] == "Windows") {
-      # Windows: Use wmic
-      ram_bytes <- system("wmic computersystem get totalphysicalmemory", intern = TRUE)
-      as.numeric(grep("\\d+", ram_bytes, value = TRUE)) / (1024^3)
-    } else {
-      # Linux/macOS: Use generic detection via system command
-      if (file.exists("/proc/meminfo")) {
-        # Linux
-        mem_info <- readLines("/proc/meminfo")
-        total_kb <- as.numeric(gsub("\\D", "", grep("MemTotal", mem_info, value = TRUE)))
-        total_kb / (1024^2)
-      } else {
-        # macOS fallback
-        as.numeric(substring(system("sysctl hw.memsize", intern = TRUE), 13)) / (1024^3)
-      }
-    }
-  }, error = function(e) {
-    # Fail-safe default: Assume constrained environment (8GB)
-    warning("Could not detect system RAM. Defaulting to conservative 8GB limit.")
-    return(8) 
-  })
-}
+```{r shap-workers}
+shap_workers <- 2
 
-# 2. Get Metrics
-system_ram_gb <- get_system_ram_gb()
-model_size_gb <- as.numeric(lobstr::obj_size(df_stack_fitted)) / (1024^3)
-safety_threshold_gb <- 8.0 
+cat(sprintf("Shap worker Count:  %d\n", shap_workers))
 
-# 3. Determine Base Worker Count
-if (system_ram_gb <= (safety_threshold_gb + 0.5)) {
-  # Constrained Mode (<= ~8GB)
-  proposed_workers <- min(2, num_workers)
-  mode_msg <- "CONSTRAINED MODE (<= 8GB RAM)"
-} else {
-  # Performance Mode (> 8GB)
-  proposed_workers <- min(4, num_workers)
-  mode_msg <- "PERFORMANCE MODE (> 8GB RAM)"
-}
-
-# 4. Safety Override (The "Anti-Crash" Check)
-# In multisession (socket) parallelization, each worker copies the model object.
-# We need: (Model_Size * Workers) + Overhead < System RAM
-est_memory_load <- model_size_gb * proposed_workers
-safe_limit <- system_ram_gb * 0.60 # Leave 40% for OS and overhead
-
-if (est_memory_load > safe_limit) {
-  shap_workers <- 1
-  warning_msg <- sprintf("Memory safety override triggered. Model (%.2f GB) too large for parallel workers.", model_size_gb)
-} else {
-  shap_workers <- proposed_workers
-  warning_msg <- NULL
-}
-
-# 5. Report Configuration
-cat(sprintf("\n--- SHAP PARALLEL CONFIGURATION ---\n"))
-cat(sprintf("System RAM detected: %.2f GB\n", system_ram_gb))
-cat(sprintf("Model object size:   %.2f GB\n", model_size_gb))
-cat(sprintf("Mode:                %s\n", mode_msg))
-if (!is.null(warning_msg)) cat(sprintf("WARNING: %s\n", warning_msg))
-cat(sprintf("Final Worker Count:  %d\n", shap_workers))
-cat("-----------------------------------\n\n")
-
-# 6. Apply Configuration
 # Clean memory before starting heavy task
 gc() 
 
