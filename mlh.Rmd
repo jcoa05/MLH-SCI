@@ -516,7 +516,7 @@ svm_grid <- grid_random(
 mars_grid <- grid_regular(
  num_terms(range = c(5, 25)),
  prod_degree(range = c(1L, 2L)),
- levels = c(num_terms = 5, prod_degree = 5)
+ levels = c(num_terms = 12, prod_degree = 2)
 )
 
 cat("Hyperparameter grids defined.\n")
