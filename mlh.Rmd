@@ -1608,7 +1608,6 @@ cat(sprintf("  %.4f%% RMSE improvement per minute of extra computation\n", effic
 
 nested_cv_multiplier <- 125 / (PARAMS$cv_folds * PARAMS$cv_repeats)
 nested_cv_proj_hours <- (tuning_time_sec * nested_cv_multiplier) / 3600
-
 current_avg_grid <- mean(training_counts$Grid_Size)
 large_grid_multiplier <- 50 / current_avg_grid
 large_grid_proj_hours <- (tuning_time_sec * large_grid_multiplier) / 3600
