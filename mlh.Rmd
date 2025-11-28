@@ -2171,7 +2171,7 @@ cat(sprintf("Output saved to: %s\n", output_filename))
 cat(sprintf("File size: %.1f KB\n", file.size(output_filename) / 1024))
 ```
 
-# PHASE 10: EVALUATION PLOTS
+# PHASE 10: EVALUATION PLOTS {.tabset}
 
 ## Calibration plot
 
@@ -2607,7 +2607,7 @@ We test the model's classification utility by setting a recovery threshold and g
 # Define a clinically meaningful binary outcome
 # This is a separate evaluation from the regression (MCID) utility
 # Example: "Achieved a high recovery score" (e.g., > 50)
-RECOVERY_THRESHOLD <- recovery_thresh
+RECOVERY_THRESHOLD <- PARAMS$recovery_thresh
 
 # Create the binary 'truth' column
 # We must use factors and set the "positive" class as the first level
